@@ -33,6 +33,29 @@
     .bt-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .bt-filter { min-width: 170px; width: auto; }
 
+    /* Quick-add composer ----------------------------------------------------- */
+    .bt-composer { margin-bottom: 16px; }
+    .bt-composer[hidden] { display: none; }
+    .bt-composer-inner {
+      display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
+      background: var(--bg-card); border: 1px solid var(--accent);
+      border-radius: var(--radius-lg); padding: 14px; box-shadow: var(--shadow-card);
+    }
+    .bt-field { display: flex; flex-direction: column; gap: 5px; }
+    .bt-field > label { font-size: 11px; font-weight: 600; letter-spacing: .04em;
+      text-transform: uppercase; color: var(--text-muted); }
+    .bt-field input, .bt-field select { width: 100%; }
+    .bt-field--name { flex: 2 1 180px; }
+    .bt-field--cat { flex: 1 1 150px; }
+    .bt-field--amt { flex: 0 1 120px; }
+    .bt-field--sm { flex: 0 1 74px; }
+    .bt-field--date { flex: 0 1 150px; }
+    .bt-composer-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+    .bt-c-status { font-size: 12px; color: var(--success); font-weight: 600; opacity: 0;
+      transition: opacity .2s; white-space: nowrap; }
+    .bt-c-status.on { opacity: 1; }
+    .bt-iconbtn.bt-c-close { width: 32px; height: 32px; }
+
     /* Table ------------------------------------------------------------------ */
     .bt-scroll { overflow-x: auto; border-radius: var(--radius-lg);
       border: 1px solid var(--border-primary); background: var(--bg-card);
@@ -135,8 +158,12 @@
 </head>
 <body>
   <div id="bt-scroll">
-    <div class="bt-wrap" id="root">
-      <div class="bt-loading">Loading budget…</div>
+    <div class="bt-wrap">
+      <div id="bt-topbar"></div>
+      <div id="bt-composer" class="bt-composer" hidden></div>
+      <div id="root">
+        <div class="bt-loading">Loading budget…</div>
+      </div>
     </div>
   </div>
 
@@ -172,6 +199,8 @@
         colNote:'Note', tabCategory:'By category', tabDate:'By date', tabPayer:'By payer',
         tabPaid:'Paid vs unpaid', paid:'Covered', unpaid:'Outstanding', unassigned:'Unassigned',
         noDate:'No date', emptyTitle:'No expenses yet', amountsIn:'amounts in',
+        cName:'Name', cAmount:'Amount', cCategory:'Category', cPersons:'Pers.', cDays:'Days',
+        cDate:'Date', cNamePh:'What did you spend on?', add:'Add', added:'Added', close:'Close',
         emptyText:'Add your first expense to start building the budget table.',
         lockedTotal:'Has an assigned payer — edit the amount in the Budget tab to keep settlement balanced.',
         lockedForeign:'Foreign-currency amount — edit it in the Budget tab.',
@@ -184,6 +213,8 @@
         colNote:'Notiz', tabCategory:'Nach Kategorie', tabDate:'Nach Datum', tabPayer:'Nach Zahler',
         tabPaid:'Bezahlt / offen', paid:'Gedeckt', unpaid:'Offen', unassigned:'Nicht zugeordnet',
         noDate:'Kein Datum', emptyTitle:'Noch keine Ausgaben', amountsIn:'Beträge in',
+        cName:'Name', cAmount:'Betrag', cCategory:'Kategorie', cPersons:'Pers.', cDays:'Tage',
+        cDate:'Datum', cNamePh:'Wofür war die Ausgabe?', add:'Hinzufügen', added:'Hinzugefügt', close:'Schließen',
         emptyText:'Füge deine erste Ausgabe hinzu, um die Budgettabelle aufzubauen.',
         lockedTotal:'Hat einen zugewiesenen Zahler — bearbeite den Betrag im Budget-Tab, damit die Abrechnung stimmt.',
         lockedForeign:'Betrag in Fremdwährung — im Budget-Tab bearbeiten.',
@@ -200,7 +231,8 @@
       rates: {},             // rates[X] = units of X per 1 baseCurrency
       items: [], loading: true, error: null,
       filter: 'all', summaryTab: 'category',
-      collapsed: {}, editing: null, pendingDelete: null
+      collapsed: {}, editing: null, pendingDelete: null,
+      composerBuilt: false, composerCat: 'food' // last category used in the quick-add bar
     };
 
     function lang() { return (state.locale || '').toLowerCase().indexOf('de') === 0 ? 'de' : 'en'; }
@@ -306,21 +338,112 @@
       return best;
     }
 
-    function addExpense(cat) {
-      var date = lastDateInCategory(cat) || todayISO();
-      trek.invoke('/items?tripId=' + state.tripId, {
-        method: 'POST',
-        // New rows are denominated in the display currency, so their total stays
-        // inline-editable (no conversion) and shows up 1:1 in the table.
-        body: { name: t('newEntry'), category: cat, expense_date: date, currency: state.baseCurrency }
-      }).then(function (created) {
-        state.items.push(created);
-        state.collapsed[cat] = false;
-        state.editing = { id: created.id, field: 'name' };
-        render();
-      }).catch(function (e) {
-        trek.notify('error', t('saveErr') + ': ' + (e && e.message ? e.message : ''));
+    function lastDateOverall() {
+      var best = null;
+      for (var i = 0; i < state.items.length; i++) {
+        var d = state.items[i].expense_date;
+        if (d && (!best || d > best)) best = d;
+      }
+      return best;
+    }
+
+    // --- Quick-add composer --------------------------------------------------
+    // Small helpers over the composer inputs (built once, persistent across renders).
+    function cEl(id) { return document.getElementById(id); }
+    function cVal(id) { var e = cEl(id); return e ? e.value : ''; }
+    function cSet(id, v) { var e = cEl(id); if (e) e.value = v; }
+
+    function buildComposer() {
+      var c = document.getElementById('bt-composer');
+      var opts = '';
+      for (var i = 0; i < CATS.length; i++) {
+        opts += '<option value="' + CATS[i] + '">' + escapeHtml(catLabel(CATS[i])) + '</option>';
+      }
+      c.innerHTML =
+        '<div class="bt-composer-inner">' +
+          field('bt-c-name', t('cName'), '<input id="bt-c-name" class="trek-input" placeholder="' + escapeHtml(t('cNamePh')) + '" />', 'name') +
+          field('bt-c-amount', t('cAmount'), '<input id="bt-c-amount" class="trek-input num" type="number" step="0.01" min="0" placeholder="0.00" />', 'amt') +
+          field('bt-c-cat', t('cCategory'), '<select id="bt-c-cat" class="trek-select">' + opts + '</select>', 'cat') +
+          field('bt-c-persons', t('cPersons'), '<input id="bt-c-persons" class="trek-input num" type="number" min="0" />', 'sm') +
+          field('bt-c-days', t('cDays'), '<input id="bt-c-days" class="trek-input num" type="number" min="0" />', 'sm') +
+          field('bt-c-date', t('cDate'), '<input id="bt-c-date" class="trek-input" type="date" />', 'date') +
+          '<div class="bt-composer-actions">' +
+            '<span id="bt-c-status" class="bt-c-status"></span>' +
+            '<button id="bt-c-add" class="trek-btn trek-btn--primary" type="button">' + ICON.plus + '<span>' + escapeHtml(t('add')) + '</span></button>' +
+            '<button id="bt-c-close" class="bt-iconbtn bt-c-close" type="button" title="' + escapeHtml(t('close')) + '" aria-label="' + escapeHtml(t('close')) + '">&times;</button>' +
+          '</div>' +
+        '</div>';
+
+      cEl('bt-c-add').addEventListener('click', submitComposer);
+      cEl('bt-c-close').addEventListener('click', closeComposer);
+      cEl('bt-c-cat').addEventListener('change', function () { state.composerCat = cEl('bt-c-cat').value; });
+      c.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); submitComposer(); }
+        else if (e.key === 'Escape') { e.preventDefault(); closeComposer(); }
       });
+      state.composerBuilt = true;
+
+      function field(id, label, control, mod) {
+        return '<div class="bt-field bt-field--' + mod + '"><label for="' + id + '">' + escapeHtml(label) + '</label>' + control + '</div>';
+      }
+    }
+
+    function openComposerWith(cat) {
+      if (cat) state.composerCat = cat;
+      var c = document.getElementById('bt-composer');
+      c.hidden = false;
+      cSet('bt-c-cat', state.composerCat || 'other');
+      if (!cVal('bt-c-date')) cSet('bt-c-date', (cat ? lastDateInCategory(cat) : null) || lastDateOverall() || todayISO());
+      var name = cEl('bt-c-name'); if (name) { name.focus(); }
+      c.scrollIntoView({ block: 'nearest' });
+    }
+    function toggleComposer() {
+      var c = document.getElementById('bt-composer');
+      if (c.hidden) openComposerWith(null); else closeComposer();
+    }
+    function closeComposer() {
+      var c = document.getElementById('bt-composer');
+      c.hidden = true;
+    }
+
+    function submitComposer() {
+      var name = (cVal('bt-c-name') || '').trim();
+      if (!name) { var n = cEl('bt-c-name'); if (n) n.focus(); return; }
+      var cat = cVal('bt-c-cat') || state.composerCat || 'other';
+      state.composerCat = cat;
+      var amount = parseFloat((cVal('bt-c-amount') || '').replace(',', '.'));
+      var persons = parseInt(cVal('bt-c-persons'), 10);
+      var days = parseInt(cVal('bt-c-days'), 10);
+      var date = cVal('bt-c-date') || todayISO();
+      var body = { name: name, category: cat, expense_date: date, currency: state.baseCurrency };
+      if (!isNaN(amount) && amount > 0) body.total_price = amount;
+      if (!isNaN(persons) && persons > 0) body.persons = persons;
+      if (!isNaN(days) && days > 0) body.days = days;
+
+      var addBtn = cEl('bt-c-add'); if (addBtn) addBtn.disabled = true;
+      trek.invoke('/items?tripId=' + state.tripId, { method: 'POST', body: body })
+        .then(function (created) {
+          state.items.push(created);
+          state.collapsed[cat] = false;
+          render();
+          if (addBtn) addBtn.disabled = false;
+          // Keep the bar open for rapid entry: clear name+amount, keep category/date.
+          cSet('bt-c-name', ''); cSet('bt-c-amount', '');
+          flashStatus(t('added') + ' · ' + name);
+          var nm = cEl('bt-c-name'); if (nm) nm.focus();
+        })
+        .catch(function (e) {
+          if (addBtn) addBtn.disabled = false;
+          trek.notify('error', t('saveErr') + ': ' + (e && e.message ? e.message : ''));
+        });
+    }
+
+    var _statusTimer = null;
+    function flashStatus(msg) {
+      var s = cEl('bt-c-status'); if (!s) return;
+      s.textContent = msg; s.classList.add('on');
+      if (_statusTimer) clearTimeout(_statusTimer);
+      _statusTimer = setTimeout(function () { s.classList.remove('on'); }, 1800);
     }
 
     function removeItem(id) {
@@ -435,22 +558,10 @@
     }
 
     // --- Rendering: full view ------------------------------------------------
-    function render() {
-      var root = document.getElementById('root');
-      if (state.loading) { root.innerHTML = '<div class="bt-loading">Loading budget…</div>'; return; }
-      if (state.error) {
-        root.innerHTML = '<div class="bt-empty"><div class="bt-empty-title bt-error">' +
-          escapeHtml(t('loadErr')) + '</div><div class="bt-muted">' + escapeHtml(state.error) + '</div></div>';
-        return;
-      }
-
-      var grand = 0;
-      for (var i = 0; i < state.items.length; i++) grand += baseAmount(state.items[i]);
-      var count = state.items.length;
-
-      var html = '';
-      // Toolbar
-      html += '<div class="bt-toolbar">';
+    // Persistent topbar (total + filter + Add) lives outside #root so re-rendering
+    // the table never disturbs it or the quick-add composer.
+    function renderTopbar(grand, count) {
+      var html = '<div class="bt-toolbar">';
       html += '<div><div class="bt-total-label">' + escapeHtml(t('total')) + '</div>' +
         '<div class="bt-total-value">' + escapeHtml(fmtMoney(grand)) + '</div>' +
         '<div class="bt-total-sub">' + count + ' ' + escapeHtml(count === 1 ? t('entry') : t('entries')) +
@@ -463,20 +574,39 @@
           escapeHtml(catLabel(CATS[c])) + '</option>';
       }
       html += '</select>';
-      var addCat = (state.filter !== 'all') ? state.filter : 'other';
-      html += '<button class="trek-btn trek-btn--primary" data-add="' + addCat + '">' + ICON.plus +
+      html += '<button class="trek-btn trek-btn--primary" data-add-open="1">' + ICON.plus +
         '<span>' + escapeHtml(t('addExpense')) + '</span></button>';
       html += '</div></div>';
+      return html;
+    }
 
+    function render() {
+      var topbar = document.getElementById('bt-topbar');
+      var root = document.getElementById('root');
+      if (state.loading) { if (topbar) topbar.innerHTML = ''; root.innerHTML = '<div class="bt-loading">Loading budget…</div>'; return; }
+      if (state.error) {
+        if (topbar) topbar.innerHTML = '';
+        root.innerHTML = '<div class="bt-empty"><div class="bt-empty-title bt-error">' +
+          escapeHtml(t('loadErr')) + '</div><div class="bt-muted">' + escapeHtml(state.error) + '</div></div>';
+        return;
+      }
+
+      var grand = 0;
+      for (var i = 0; i < state.items.length; i++) grand += baseAmount(state.items[i]);
+      var count = state.items.length;
+
+      topbar.innerHTML = renderTopbar(grand, count);
+
+      var html = '';
       if (count === 0) {
         html += '<div class="bt-scroll" style="border:none;background:transparent;box-shadow:none">' +
           '<div class="bt-empty">' + ICON.wallet +
           '<div class="bt-empty-title">' + escapeHtml(t('emptyTitle')) + '</div>' +
           '<div class="trek-muted" style="margin-bottom:16px">' + escapeHtml(t('emptyText')) + '</div>' +
-          '<button class="trek-btn trek-btn--primary" data-add="other">' + ICON.plus +
+          '<button class="trek-btn trek-btn--primary" data-add-open="1">' + ICON.plus +
           '<span>' + escapeHtml(t('addExpense')) + '</span></button></div></div>';
         root.innerHTML = html;
-        wire();
+        focusEditor();
         return;
       }
 
@@ -519,9 +649,9 @@
           html += renderRow(rows[k]);
         }
 
-        // Per-category add row
+        // Per-category add row — opens the composer pre-set to this category.
         html += '<tr class="bt-add"><td colspan="' + COLSPAN + '">' +
-          '<button class="bt-add-btn" data-add="' + cat + '">' + ICON.plus +
+          '<button class="bt-add-btn" data-add-cat="' + cat + '">' + ICON.plus +
           '<span>' + escapeHtml(t('addExpense')) + '</span></button></td></tr>';
       }
       html += '</tbody></table></div>';
@@ -530,7 +660,7 @@
       html += renderSummary();
 
       root.innerHTML = html;
-      wire();
+      focusEditor();
     }
 
     function renderRow(item) {
@@ -697,23 +827,34 @@
 
     function emptyRow() { return '<div class="bt-srow"><div class="lbl trek-muted">—</div><div></div><div></div></div>'; }
 
-    // --- Event wiring (delegation, re-bound after each render) ----------------
-    function wire() {
-      var root = document.getElementById('root');
+    // --- Event wiring --------------------------------------------------------
+    // Listeners are attached ONCE to the stable #bt-scroll container (delegation),
+    // so re-rendering #root/#bt-topbar never accumulates handlers. The inline
+    // editor and the composer are the only focus-bearing transient/persistent bits.
+    function init() {
+      if (!state.composerBuilt) buildComposer();
+      var scope = document.getElementById('bt-scroll');
+      scope.addEventListener('click', onClick);
+      scope.addEventListener('change', function (e) {
+        var tgt = e.target;
+        if (!tgt) return;
+        if (tgt.id === 'bt-filter') { state.filter = tgt.value; render(); return; }
+        if (tgt.id === 'editor' && tgt.tagName === 'SELECT') { commitEdit(); return; }
+      });
+      scope.addEventListener('keydown', function (e) {
+        if (e.target && e.target.id === 'editor') onEditorKey(e);
+      });
+      scope.addEventListener('focusout', function (e) {
+        if (e.target && e.target.id === 'editor') setTimeout(commitEdit, 0);
+      });
+    }
 
-      var filter = document.getElementById('bt-filter');
-      if (filter) filter.addEventListener('change', function () { state.filter = filter.value; render(); });
-
-      root.addEventListener('click', onClick);
-
+    function focusEditor() {
+      if (!state.editing) return;
       var ed = document.getElementById('editor');
-      if (ed) {
-        ed.focus();
-        if (ed.select && ed.tagName === 'INPUT') { try { ed.select(); } catch (e) {} }
-        ed.addEventListener('keydown', onEditorKey);
-        ed.addEventListener('blur', function () { setTimeout(commitEdit, 0); });
-        if (ed.tagName === 'SELECT') ed.addEventListener('change', commitEdit);
-      }
+      if (!ed) return;
+      ed.focus();
+      if (ed.select && ed.tagName === 'INPUT') { try { ed.select(); } catch (e) {} }
     }
 
     function onClick(e) {
@@ -723,8 +864,9 @@
         state.collapsed[cat] = !state.collapsed[cat];
         render(); return;
       }
-      if ((el = e.target.closest('[data-add]'))) {
-        addExpense(el.getAttribute('data-add')); return;
+      if (e.target.closest('[data-add-open]')) { toggleComposer(); return; }
+      if ((el = e.target.closest('[data-add-cat]'))) {
+        openComposerWith(el.getAttribute('data-add-cat')); return;
       }
       if ((el = e.target.closest('[data-tab]'))) {
         state.summaryTab = el.getAttribute('data-tab'); render(); return;
@@ -755,6 +897,7 @@
     // --- Boot ----------------------------------------------------------------
     trek.onContext(function (m) {
       state.locale = m.locale || 'en';
+      if (!state.inited) { state.inited = true; init(); } // build composer + delegated listeners once
       // Display currency = the user's Settings default_currency (≥3.2.1 context).
       var disp = (m.formats && m.formats.currency) ? String(m.formats.currency).toUpperCase() : null;
       var newTrip = m.tripId != null ? Number(m.tripId) : null;
