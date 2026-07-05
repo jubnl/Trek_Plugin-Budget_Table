@@ -1,0 +1,46 @@
+{
+  "id": "budget-table",
+  "name": "Budget Table",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "author": "jubnl",
+  "description": "Bring back the pre-v3.1 categorized budget table",
+  "type": "trip-page",
+  "trek": ">=3.2.1 <4.0.0",
+  "nativeModules": false,
+  "permissions": [
+    "db:read:trips",
+    "db:read:costs",
+    "db:write:costs",
+    "http:outbound:api.frankfurter.dev"
+  ],
+  "egress": [
+    "api.frankfurter.dev"
+  ],
+  "requiredAddons": [
+    "budget"
+  ],
+  "pluginDependencies": [],
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/items",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/items",
+      "auth": true
+    },
+    {
+      "method": "PATCH",
+      "path": "/items",
+      "auth": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/items",
+      "auth": true
+    }
+  ]
+}

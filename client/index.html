@@ -1,0 +1,781 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Budget Table</title>
+  <!-- trek:ui -->
+  <style>
+    /* The kit ships tokens + component classes; the table below is bespoke and
+       drives entirely off the kit's CSS variables so it tracks the host theme. */
+
+    /* The trip-page host clips its iframe to a fixed box (overflow:hidden) and caps
+       the reported height at 2000px. So instead of letting the document grow (which
+       would be clipped, with the summary unreachable), we fill the viewport and
+       scroll INTERNALLY. Because #bt-scroll is height:100% with its own overflow,
+       documentElement.scrollHeight stays ≈ the viewport height — so the kit reports
+       the box height, the iframe never overgrows, and everything stays reachable. */
+    html, body { height: 100%; }
+    body { margin: 0; overflow: hidden; }
+    #bt-scroll { height: 100%; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+    .bt-wrap { max-width: 1280px; margin: 0 auto; padding: 20px 20px 40px; }
+
+    /* Toolbar ---------------------------------------------------------------- */
+    .bt-toolbar {
+      display: flex; align-items: flex-end; justify-content: space-between;
+      gap: 16px; flex-wrap: wrap; margin-bottom: 18px;
+    }
+    .bt-total-label { font-size: 12px; font-weight: 600; letter-spacing: .12em;
+      text-transform: uppercase; color: var(--text-muted); }
+    .bt-total-value { font-size: 28px; font-weight: 700; color: var(--text-primary);
+      font-variant-numeric: tabular-nums; line-height: 1.1; }
+    .bt-total-sub { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+    .bt-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .bt-filter { min-width: 170px; width: auto; }
+
+    /* Table ------------------------------------------------------------------ */
+    .bt-scroll { overflow-x: auto; border-radius: var(--radius-lg);
+      border: 1px solid var(--border-primary); background: var(--bg-card);
+      box-shadow: var(--shadow-card); }
+    table.bt { width: 100%; border-collapse: collapse; font-size: 13px;
+      min-width: 940px; }
+    table.bt th {
+      position: sticky; top: 0; z-index: 1;
+      text-align: left; font-weight: 600; font-size: 11px; letter-spacing: .04em;
+      text-transform: uppercase; color: var(--text-muted);
+      padding: 10px 12px; background: var(--bg-card);
+      border-bottom: 1px solid var(--border-primary); white-space: nowrap;
+    }
+    table.bt th.num, table.bt td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    table.bt td { padding: 4px 12px; border-bottom: 1px solid var(--border-faint);
+      color: var(--text-secondary); vertical-align: middle; }
+    table.bt tr:last-child td { border-bottom: none; }
+
+    /* Category group header row */
+    tr.bt-group td {
+      background: var(--bg-hover); border-bottom: 1px solid var(--border-primary);
+      padding: 0;
+    }
+    .bt-group-inner { display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+      cursor: pointer; user-select: none; }
+    .bt-group-name { font-weight: 600; font-size: 13px; color: var(--text-primary);
+      text-transform: none; letter-spacing: 0; }
+    .bt-group-count { color: var(--text-faint); font-weight: 500; font-size: 12px; }
+    .bt-group-sub { margin-left: auto; font-weight: 700; color: var(--text-primary);
+      font-variant-numeric: tabular-nums; }
+    .bt-chevron { width: 14px; height: 14px; color: var(--text-muted);
+      transition: transform .15s var(--trek-ease); flex: none; }
+    .bt-chevron.collapsed { transform: rotate(-90deg); }
+    .bt-dot { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+
+    /* Editable cells */
+    td.bt-edit { cursor: text; }
+    td.bt-edit:hover { background: var(--bg-hover); box-shadow: inset 0 0 0 1px var(--border-primary); }
+    td.bt-locked { color: var(--text-faint); }
+    .bt-cell-empty { color: var(--text-faint); }
+    .bt-derived { color: var(--text-muted); }
+    .bt-orig { font-size: 11px; color: var(--text-faint); }
+
+    /* Inline editor input */
+    #editor { width: 100%; box-sizing: border-box; padding: 5px 8px; font: inherit;
+      font-size: 13px; border: 1px solid var(--accent); border-radius: 7px;
+      background: var(--bg-input); color: var(--text-primary); outline: none; }
+    #editor.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+    .bt-actions { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
+    .bt-iconbtn { display: inline-flex; align-items: center; justify-content: center;
+      width: 26px; height: 26px; padding: 0; border-radius: 7px; border: 1px solid transparent;
+      background: transparent; color: var(--text-faint); cursor: pointer;
+      transition: background .12s, color .12s; }
+    .bt-iconbtn:hover { background: var(--bg-hover); color: var(--text-secondary); }
+    .bt-iconbtn.danger:hover { color: var(--danger); background: var(--danger-soft); }
+    .bt-iconbtn svg { width: 15px; height: 15px; }
+    .bt-people { color: var(--text-faint); display: inline-flex; }
+    .bt-people svg { width: 14px; height: 14px; }
+
+    tr.bt-add td { padding: 6px 12px; }
+    .bt-add-btn { display: inline-flex; align-items: center; gap: 6px;
+      font-size: 12px; font-weight: 600; color: var(--text-muted);
+      background: transparent; border: none; cursor: pointer; padding: 4px 6px;
+      border-radius: 7px; }
+    .bt-add-btn:hover { color: var(--accent); background: var(--bg-hover); }
+    .bt-add-btn svg { width: 14px; height: 14px; }
+
+    /* Summary panel ---------------------------------------------------------- */
+    .bt-summary { margin-top: 22px; }
+    .bt-tabs { display: inline-flex; gap: 4px; padding: 4px; border-radius: 12px;
+      background: var(--bg-hover); margin-bottom: 14px; }
+    .bt-tab { font: inherit; font-size: 12px; font-weight: 600; padding: 6px 12px;
+      border: none; border-radius: 8px; background: transparent; color: var(--text-muted);
+      cursor: pointer; transition: background .12s, color .12s; }
+    .bt-tab.active { background: var(--bg-card); color: var(--text-primary);
+      box-shadow: var(--shadow-sm); }
+    .bt-slist { display: flex; flex-direction: column; gap: 2px; }
+    .bt-srow { display: grid; grid-template-columns: 150px 1fr auto;
+      align-items: center; gap: 14px; padding: 8px 4px; }
+    .bt-srow .lbl { font-size: 13px; color: var(--text-secondary); font-weight: 500;
+      display: flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bt-srow .amt { font-size: 13px; font-weight: 700; color: var(--text-primary);
+      font-variant-numeric: tabular-nums; }
+    .bt-bar { height: 8px; border-radius: 999px; background: var(--bg-hover); overflow: hidden; }
+    .bt-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+    .bt-srow .pct { font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+    /* States */
+    .bt-empty, .bt-loading { text-align: center; padding: 56px 20px; color: var(--text-muted); }
+    .bt-empty svg { width: 40px; height: 40px; color: var(--text-faint); margin-bottom: 12px; }
+    .bt-empty-title { font-size: 15px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
+    .bt-error { color: var(--danger); }
+
+    @media (max-width: 620px) {
+      .bt-srow { grid-template-columns: 110px 1fr auto; gap: 8px; }
+      .bt-total-value { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="bt-scroll">
+    <div class="bt-wrap" id="root">
+      <div class="bt-loading">Loading budget…</div>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    // --- Categories (fixed set, mirrors TREK's COST_CATEGORIES) --------------
+    var CATS = ['accommodation','food','groceries','transport','flights','activities',
+      'sightseeing','shopping','fees','health','tips','other'];
+    var CAT_LABELS = {
+      en: { accommodation:'Accommodation', food:'Food', groceries:'Groceries',
+        transport:'Transport', flights:'Flights', activities:'Activities',
+        sightseeing:'Sightseeing', shopping:'Shopping', fees:'Fees', health:'Health',
+        tips:'Tips', other:'Other' },
+      de: { accommodation:'Unterkunft', food:'Essen', groceries:'Lebensmittel',
+        transport:'Transport', flights:'Flüge', activities:'Aktivitäten',
+        sightseeing:'Sehenswürdigkeiten', shopping:'Einkaufen', fees:'Gebühren',
+        health:'Gesundheit', tips:'Trinkgeld', other:'Sonstiges' }
+    };
+    // Distinct hues per category so the group dot / summary reads at a glance.
+    var CAT_COLORS = {
+      accommodation:'#6366f1', food:'#f97316', groceries:'#84cc16', transport:'#06b6d4',
+      flights:'#3b82f6', activities:'#ec4899', sightseeing:'#a855f7', shopping:'#eab308',
+      fees:'#64748b', health:'#ef4444', tips:'#14b8a6', other:'#94a3b8'
+    };
+
+    var STR = {
+      en: { title:'Budget Table', total:'Total budget', entries:'entries', entry:'entry',
+        newEntry:'New expense', addExpense:'Add expense', filterAll:'All categories',
+        colName:'Name', colTotal:'Total', colPersons:'Persons', colDays:'Days',
+        colPerPerson:'Per person', colPerDay:'Per day', colPpDay:'P.p / day', colDate:'Date',
+        colNote:'Note', tabCategory:'By category', tabDate:'By date', tabPayer:'By payer',
+        tabPaid:'Paid vs unpaid', paid:'Covered', unpaid:'Outstanding', unassigned:'Unassigned',
+        noDate:'No date', emptyTitle:'No expenses yet', amountsIn:'amounts in',
+        emptyText:'Add your first expense to start building the budget table.',
+        lockedTotal:'Has an assigned payer — edit the amount in the Budget tab to keep settlement balanced.',
+        lockedForeign:'Foreign-currency amount — edit it in the Budget tab.',
+        remove:'Remove', confirm:'Remove?', yes:'Yes', no:'No', today:'Today',
+        saveErr:'Could not save', loadErr:'Could not load the budget' },
+      de: { title:'Budgettabelle', total:'Gesamtbudget', entries:'Einträge', entry:'Eintrag',
+        newEntry:'Neue Ausgabe', addExpense:'Ausgabe hinzufügen', filterAll:'Alle Kategorien',
+        colName:'Name', colTotal:'Summe', colPersons:'Personen', colDays:'Tage',
+        colPerPerson:'Pro Person', colPerDay:'Pro Tag', colPpDay:'P.P / Tag', colDate:'Datum',
+        colNote:'Notiz', tabCategory:'Nach Kategorie', tabDate:'Nach Datum', tabPayer:'Nach Zahler',
+        tabPaid:'Bezahlt / offen', paid:'Gedeckt', unpaid:'Offen', unassigned:'Nicht zugeordnet',
+        noDate:'Kein Datum', emptyTitle:'Noch keine Ausgaben', amountsIn:'Beträge in',
+        emptyText:'Füge deine erste Ausgabe hinzu, um die Budgettabelle aufzubauen.',
+        lockedTotal:'Hat einen zugewiesenen Zahler — bearbeite den Betrag im Budget-Tab, damit die Abrechnung stimmt.',
+        lockedForeign:'Betrag in Fremdwährung — im Budget-Tab bearbeiten.',
+        remove:'Entfernen', confirm:'Entfernen?', yes:'Ja', no:'Nein', today:'Heute',
+        saveErr:'Speichern fehlgeschlagen', loadErr:'Budget konnte nicht geladen werden' }
+    };
+
+    // --- State ---------------------------------------------------------------
+    var state = {
+      tripId: null, locale: 'en',
+      baseCurrency: 'EUR',   // display currency (user setting), from formats.currency
+      tripCurrency: 'EUR',   // the trip's own base currency
+      displayCurrency: null, // requested display base sent to the server
+      rates: {},             // rates[X] = units of X per 1 baseCurrency
+      items: [], loading: true, error: null,
+      filter: 'all', summaryTab: 'category',
+      collapsed: {}, editing: null, pendingDelete: null
+    };
+
+    function lang() { return (state.locale || '').toLowerCase().indexOf('de') === 0 ? 'de' : 'en'; }
+    function t(k) { var L = STR[lang()]; return (L && L[k] != null) ? L[k] : STR.en[k]; }
+    function catLabel(c) { var m = CAT_LABELS[lang()] || CAT_LABELS.en; return m[c] || CAT_LABELS.en[c] || c; }
+
+    // --- Money helpers -------------------------------------------------------
+    // Mirrors TREK's own Costs panel: every amount is converted into the user's
+    // display currency (state.baseCurrency) with live rates. rates[X] = units of X
+    // per 1 base, so an amount in currency C converts as amount / rates[C]. An item
+    // with no explicit currency is treated as being in the trip currency.
+    function curOf(item) {
+      return String(item.currency || state.tripCurrency || state.baseCurrency).toUpperCase();
+    }
+    function convert(amount, from) {
+      var a = Number(amount) || 0;
+      var base = String(state.baseCurrency).toUpperCase();
+      var f = String(from || base).toUpperCase();
+      if (f === base) return a;
+      var r = state.rates && state.rates[f];
+      return (r && r > 0) ? a / r : a; // no rate → show as-is (offline fallback)
+    }
+    function baseAmount(item) { return convert(item.total_price, curOf(item)); }
+    function baseOf(amount, item) { return convert(amount, curOf(item)); }
+    function isForeign(item) { return curOf(item) !== String(state.baseCurrency).toUpperCase(); }
+    function fmtMoney(v, currency) {
+      var cur = currency || state.baseCurrency;
+      try {
+        return new Intl.NumberFormat(state.locale || 'en', { style: 'currency', currency: cur }).format(v || 0);
+      } catch (e) {
+        return (Math.round((v || 0) * 100) / 100).toFixed(2) + ' ' + cur;
+      }
+    }
+    // Plain number for in-table money cells; the base currency is stated once in
+    // the toolbar caption, so cells stay narrow and read like a spreadsheet.
+    function fmtPlain(v) {
+      try {
+        return new Intl.NumberFormat(state.locale || 'en', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v || 0);
+      } catch (e) { return (Math.round((v || 0) * 100) / 100).toFixed(2); }
+    }
+    function fmtNum(v) {
+      if (v == null || v === '') return '';
+      return String(v);
+    }
+    // The amount is only safely inline-editable when it maps 1:1 to what we show:
+    // no assigned payers (settlement invariant) and denominated in the display
+    // currency (otherwise the typed number wouldn't match the converted display).
+    function totalEditable(item) {
+      return !hasPayers(item) && !isForeign(item);
+    }
+    function todayISO() {
+      // Local date without pulling in Date arithmetic surprises.
+      var d = new Date();
+      var m = String(d.getMonth() + 1).padStart(2, '0');
+      var day = String(d.getDate()).padStart(2, '0');
+      return d.getFullYear() + '-' + m + '-' + day;
+    }
+    function escapeHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+      });
+    }
+    function hasPayers(item) { return Array.isArray(item.payers) && item.payers.length > 0; }
+
+    // --- SVG icons (inline; CSP blocks external/bundled images) --------------
+    var ICON = {
+      chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+      plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>',
+      trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>',
+      people: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+      wallet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4M3 5v14a2 2 0 0 0 2 2h16v-5M18 12a2 2 0 0 0 0 4h4v-4z"/></svg>'
+    };
+
+    // --- Data ----------------------------------------------------------------
+    function load() {
+      if (!state.tripId) return;
+      var sub = '/items?tripId=' + state.tripId +
+        (state.displayCurrency ? '&base=' + encodeURIComponent(state.displayCurrency) : '');
+      trek.invoke(sub, { method: 'GET' }).then(function (data) {
+        state.items = (data && data.items) || [];
+        state.baseCurrency = (data && data.baseCurrency) || 'EUR';
+        state.tripCurrency = (data && data.tripCurrency) || state.baseCurrency;
+        state.rates = (data && data.rates) || {};
+        state.loading = false; state.error = null;
+        render();
+      }).catch(function (e) {
+        state.loading = false; state.error = e && e.message ? e.message : t('loadErr');
+        render();
+      });
+    }
+
+    function itemById(id) {
+      for (var i = 0; i < state.items.length; i++) if (state.items[i].id === id) return state.items[i];
+      return null;
+    }
+
+    function lastDateInCategory(cat) {
+      var best = null;
+      for (var i = 0; i < state.items.length; i++) {
+        var it = state.items[i];
+        if (it.category === cat && it.expense_date && (!best || it.expense_date > best)) best = it.expense_date;
+      }
+      return best;
+    }
+
+    function addExpense(cat) {
+      var date = lastDateInCategory(cat) || todayISO();
+      trek.invoke('/items?tripId=' + state.tripId, {
+        method: 'POST',
+        // New rows are denominated in the display currency, so their total stays
+        // inline-editable (no conversion) and shows up 1:1 in the table.
+        body: { name: t('newEntry'), category: cat, expense_date: date, currency: state.baseCurrency }
+      }).then(function (created) {
+        state.items.push(created);
+        state.collapsed[cat] = false;
+        state.editing = { id: created.id, field: 'name' };
+        render();
+      }).catch(function (e) {
+        trek.notify('error', t('saveErr') + ': ' + (e && e.message ? e.message : ''));
+      });
+    }
+
+    function removeItem(id) {
+      var item = itemById(id);
+      if (!item) return;
+      state.pendingDelete = null;
+      var idx = state.items.indexOf(item);
+      state.items.splice(idx, 1);
+      render();
+      trek.invoke('/items?tripId=' + state.tripId + '&id=' + id, { method: 'DELETE' })
+        .catch(function (e) {
+          state.items.splice(idx, 0, item); // restore on failure
+          render();
+          trek.notify('error', t('saveErr') + ': ' + (e && e.message ? e.message : ''));
+        });
+    }
+
+    // --- Inline editing ------------------------------------------------------
+    var NUMERIC = { total_price: 1, persons: 1, days: 1 };
+
+    function startEdit(id, field) {
+      var item = itemById(id);
+      if (!item) return;
+      // Guard: total/currency are read-only on payer-backed items.
+      if (field === 'currency' && hasPayers(item)) return;
+      if (field === 'total_price' && !totalEditable(item)) return;
+      state.editing = { id: id, field: field };
+      state.pendingDelete = null;
+      render();
+    }
+
+    function coerce(field, raw) {
+      var v = (raw == null ? '' : String(raw)).trim();
+      if (NUMERIC[field]) {
+        if (v === '') return field === 'total_price' ? 0 : null;
+        var n = parseFloat(v.replace(',', '.'));
+        return isNaN(n) ? null : n;
+      }
+      if (field === 'currency') return v === '' ? null : v.toUpperCase().slice(0, 3);
+      if (v === '') return field === 'name' ? null : null; // name empty handled by caller
+      return v;
+    }
+
+    function commitEdit() {
+      if (!state.editing) return;
+      var ed = document.getElementById('editor');
+      var editing = state.editing;
+      state.editing = null;
+      if (!ed) { render(); return; }
+      var item = itemById(editing.id);
+      if (!item) { render(); return; }
+      var field = editing.field;
+      var prev = item[field];
+      var val = coerce(field, ed.value);
+      // Never allow an empty name — keep the previous value.
+      if (field === 'name' && (val == null || val === '')) { render(); return; }
+      var same = (val === prev) || (val == null && (prev == null || prev === ''));
+      if (same) { render(); return; }
+
+      item[field] = val;                    // optimistic
+      render();
+      var body = {}; body[field] = val;
+      trek.invoke('/items?tripId=' + state.tripId + '&id=' + item.id, { method: 'PATCH', body: body })
+        .then(function (updated) {
+          if (updated && typeof updated === 'object' && updated.id) {
+            for (var k in updated) if (Object.prototype.hasOwnProperty.call(updated, k)) item[k] = updated[k];
+          }
+          render();
+        })
+        .catch(function (e) {
+          item[field] = prev;               // revert
+          render();
+          trek.notify('error', t('saveErr') + ': ' + (e && e.message ? e.message : ''));
+        });
+    }
+
+    function cancelEdit() { state.editing = null; render(); }
+
+    // --- Rendering: editor cell ---------------------------------------------
+    function editorHtml(item, field) {
+      var v = item[field];
+      if (field === 'category') {
+        var opts = '';
+        for (var i = 0; i < CATS.length; i++) {
+          opts += '<option value="' + CATS[i] + '"' + (CATS[i] === v ? ' selected' : '') + '>' +
+            escapeHtml(catLabel(CATS[i])) + '</option>';
+        }
+        return '<select id="editor">' + opts + '</select>';
+      }
+      if (field === 'expense_date') {
+        return '<input id="editor" type="date" value="' + escapeHtml(v || '') + '" />';
+      }
+      if (NUMERIC[field]) {
+        return '<input id="editor" class="num" type="number" step="' +
+          (field === 'total_price' ? '0.01' : '1') + '" min="0" value="' + escapeHtml(v == null ? '' : v) + '" />';
+      }
+      if (field === 'currency') {
+        return '<input id="editor" maxlength="3" value="' + escapeHtml(v || '') + '" placeholder="' +
+          escapeHtml(state.baseCurrency) + '" />';
+      }
+      // name, note
+      return '<input id="editor" value="' + escapeHtml(v == null ? '' : v) + '" />';
+    }
+
+    function cell(item, field, className, inner) {
+      var editing = state.editing && state.editing.id === item.id && state.editing.field === field;
+      var cls = 'bt-edit' + (className ? ' ' + className : '');
+      if (editing) {
+        return '<td class="' + (className || '') + '">' + editorHtml(item, field) + '</td>';
+      }
+      return '<td class="' + cls + '" data-edit="' + field + '" data-id="' + item.id + '">' + inner + '</td>';
+    }
+
+    // --- Rendering: full view ------------------------------------------------
+    function render() {
+      var root = document.getElementById('root');
+      if (state.loading) { root.innerHTML = '<div class="bt-loading">Loading budget…</div>'; return; }
+      if (state.error) {
+        root.innerHTML = '<div class="bt-empty"><div class="bt-empty-title bt-error">' +
+          escapeHtml(t('loadErr')) + '</div><div class="bt-muted">' + escapeHtml(state.error) + '</div></div>';
+        return;
+      }
+
+      var grand = 0;
+      for (var i = 0; i < state.items.length; i++) grand += baseAmount(state.items[i]);
+      var count = state.items.length;
+
+      var html = '';
+      // Toolbar
+      html += '<div class="bt-toolbar">';
+      html += '<div><div class="bt-total-label">' + escapeHtml(t('total')) + '</div>' +
+        '<div class="bt-total-value">' + escapeHtml(fmtMoney(grand)) + '</div>' +
+        '<div class="bt-total-sub">' + count + ' ' + escapeHtml(count === 1 ? t('entry') : t('entries')) +
+        ' · ' + escapeHtml(t('amountsIn')) + ' ' + escapeHtml(state.baseCurrency) + '</div></div>';
+      html += '<div class="bt-controls">';
+      html += '<select class="trek-select bt-filter" id="bt-filter">';
+      html += '<option value="all"' + (state.filter === 'all' ? ' selected' : '') + '>' + escapeHtml(t('filterAll')) + '</option>';
+      for (var c = 0; c < CATS.length; c++) {
+        html += '<option value="' + CATS[c] + '"' + (state.filter === CATS[c] ? ' selected' : '') + '>' +
+          escapeHtml(catLabel(CATS[c])) + '</option>';
+      }
+      html += '</select>';
+      var addCat = (state.filter !== 'all') ? state.filter : 'other';
+      html += '<button class="trek-btn trek-btn--primary" data-add="' + addCat + '">' + ICON.plus +
+        '<span>' + escapeHtml(t('addExpense')) + '</span></button>';
+      html += '</div></div>';
+
+      if (count === 0) {
+        html += '<div class="bt-scroll" style="border:none;background:transparent;box-shadow:none">' +
+          '<div class="bt-empty">' + ICON.wallet +
+          '<div class="bt-empty-title">' + escapeHtml(t('emptyTitle')) + '</div>' +
+          '<div class="trek-muted" style="margin-bottom:16px">' + escapeHtml(t('emptyText')) + '</div>' +
+          '<button class="trek-btn trek-btn--primary" data-add="other">' + ICON.plus +
+          '<span>' + escapeHtml(t('addExpense')) + '</span></button></div></div>';
+        root.innerHTML = html;
+        wire();
+        return;
+      }
+
+      // Table
+      html += '<div class="bt-scroll"><table class="bt"><thead><tr>';
+      html += '<th>' + escapeHtml(t('colName')) + '</th>';
+      html += '<th class="num">' + escapeHtml(t('colTotal')) + '</th>';
+      html += '<th class="num">' + escapeHtml(t('colPersons')) + '</th>';
+      html += '<th class="num">' + escapeHtml(t('colDays')) + '</th>';
+      html += '<th class="num">' + escapeHtml(t('colPerPerson')) + '</th>';
+      html += '<th class="num">' + escapeHtml(t('colPerDay')) + '</th>';
+      html += '<th class="num">' + escapeHtml(t('colPpDay')) + '</th>';
+      html += '<th>' + escapeHtml(t('colDate')) + '</th>';
+      html += '<th>' + escapeHtml(t('colNote')) + '</th>';
+      html += '<th></th>';
+      html += '</tr></thead><tbody>';
+
+      var COLSPAN = 10;
+      for (var g = 0; g < CATS.length; g++) {
+        var cat = CATS[g];
+        if (state.filter !== 'all' && state.filter !== cat) continue;
+        var rows = state.items.filter(function (it) { return it.category === cat; });
+        if (rows.length === 0) continue;
+
+        var sub = 0; for (var r = 0; r < rows.length; r++) sub += baseAmount(rows[r]);
+        var collapsed = !!state.collapsed[cat];
+
+        html += '<tr class="bt-group"><td colspan="' + COLSPAN + '">' +
+          '<div class="bt-group-inner" data-collapse="' + cat + '">' +
+          '<span class="bt-chevron' + (collapsed ? ' collapsed' : '') + '">' + ICON.chevron + '</span>' +
+          '<span class="bt-dot" style="background:' + CAT_COLORS[cat] + '"></span>' +
+          '<span class="bt-group-name">' + escapeHtml(catLabel(cat)) + '</span>' +
+          '<span class="bt-group-count">' + rows.length + '</span>' +
+          '<span class="bt-group-sub">' + escapeHtml(fmtMoney(sub)) + '</span>' +
+          '</div></td></tr>';
+
+        if (collapsed) continue;
+
+        for (var k = 0; k < rows.length; k++) {
+          html += renderRow(rows[k]);
+        }
+
+        // Per-category add row
+        html += '<tr class="bt-add"><td colspan="' + COLSPAN + '">' +
+          '<button class="bt-add-btn" data-add="' + cat + '">' + ICON.plus +
+          '<span>' + escapeHtml(t('addExpense')) + '</span></button></td></tr>';
+      }
+      html += '</tbody></table></div>';
+
+      // Summary
+      html += renderSummary();
+
+      root.innerHTML = html;
+      wire();
+    }
+
+    function renderRow(item) {
+      var base = baseAmount(item);
+      var persons = Number(item.persons) || 0;
+      var days = Number(item.days) || 0;
+      var pEff = persons > 0 ? persons : 1;
+      var dEff = days > 0 ? days : 1;
+      var perPerson = base / pEff, perDay = base / dEff, ppDay = base / (pEff * dEff);
+      var payerLocked = hasPayers(item);
+      var foreign = isForeign(item);
+
+      var html = '<tr>';
+      // Name
+      html += cell(item, 'name', '', escapeHtml(item.name || '') || '<span class="bt-cell-empty">—</span>');
+      // Total (display currency, plain number). Editable only when payer-less & display currency.
+      var totalInner = escapeHtml(fmtPlain(base)) +
+        (foreign ? '<div class="bt-orig">' + escapeHtml(fmtMoney(item.total_price, curOf(item))) + '</div>' : '');
+      if (payerLocked) {
+        html += '<td class="num bt-locked" title="' + escapeHtml(t('lockedTotal')) + '">' + totalInner +
+          ' <span class="bt-people" title="' + escapeHtml(t('lockedTotal')) + '">' + ICON.people + '</span></td>';
+      } else if (foreign) {
+        html += '<td class="num bt-locked" title="' + escapeHtml(t('lockedForeign')) + '">' + totalInner + '</td>';
+      } else {
+        html += cell(item, 'total_price', 'num', totalInner);
+      }
+      // Persons / Days
+      html += cell(item, 'persons', 'num', persons > 0 ? persons : '<span class="bt-cell-empty">—</span>');
+      html += cell(item, 'days', 'num', days > 0 ? days : '<span class="bt-cell-empty">—</span>');
+      // Derived (read-only, base currency)
+      html += '<td class="num bt-derived">' + escapeHtml(fmtPlain(perPerson)) + '</td>';
+      html += '<td class="num bt-derived">' + escapeHtml(fmtPlain(perDay)) + '</td>';
+      html += '<td class="num bt-derived">' + escapeHtml(fmtPlain(ppDay)) + '</td>';
+      // Date
+      html += cell(item, 'expense_date', '', item.expense_date
+        ? escapeHtml(item.expense_date)
+        : '<span class="bt-cell-empty">—</span>');
+      // Note
+      html += cell(item, 'note', '', item.note
+        ? escapeHtml(item.note)
+        : '<span class="bt-cell-empty">—</span>');
+      // Actions
+      html += '<td><div class="bt-actions">';
+      if (state.pendingDelete === item.id) {
+        html += '<span class="trek-muted" style="font-size:12px">' + escapeHtml(t('confirm')) + '</span>' +
+          '<button class="bt-iconbtn danger" data-del-yes="' + item.id + '" title="' + escapeHtml(t('yes')) + '">' + ICON.trash + '</button>' +
+          '<button class="bt-iconbtn" data-del-no="1" title="' + escapeHtml(t('no')) + '">&times;</button>';
+      } else {
+        html += '<button class="bt-iconbtn danger" data-del="' + item.id + '" title="' + escapeHtml(t('remove')) + '">' + ICON.trash + '</button>';
+      }
+      html += '</div></td>';
+      html += '</tr>';
+      return html;
+    }
+
+    // --- Summary panel -------------------------------------------------------
+    function renderSummary() {
+      var tabs = [['category', t('tabCategory')], ['date', t('tabDate')],
+        ['payer', t('tabPayer')], ['paid', t('tabPaid')]];
+      var html = '<div class="bt-summary"><div class="bt-tabs">';
+      for (var i = 0; i < tabs.length; i++) {
+        html += '<button class="bt-tab' + (state.summaryTab === tabs[i][0] ? ' active' : '') +
+          '" data-tab="' + tabs[i][0] + '">' + escapeHtml(tabs[i][1]) + '</button>';
+      }
+      html += '</div><div class="bt-slist">';
+
+      if (state.summaryTab === 'category') html += summaryCategory();
+      else if (state.summaryTab === 'date') html += summaryDate();
+      else if (state.summaryTab === 'payer') html += summaryPayer();
+      else html += summaryPaid();
+
+      html += '</div></div>';
+      return html;
+    }
+
+    function barRow(label, dot, amount, max) {
+      var pct = max > 0 ? Math.round((amount / max) * 100) : 0;
+      return '<div class="bt-srow"><div class="lbl">' +
+        (dot ? '<span class="bt-dot" style="background:' + dot + '"></span>' : '') +
+        escapeHtml(label) + '</div>' +
+        '<div class="bt-bar"><span style="width:' + pct + '%"></span></div>' +
+        '<div class="amt">' + escapeHtml(fmtMoney(amount)) + '</div></div>';
+    }
+
+    function summaryCategory() {
+      var totals = {};
+      for (var i = 0; i < state.items.length; i++) {
+        var it = state.items[i];
+        totals[it.category] = (totals[it.category] || 0) + baseAmount(it);
+      }
+      var list = [];
+      for (var c = 0; c < CATS.length; c++) if (totals[CATS[c]]) list.push([CATS[c], totals[CATS[c]]]);
+      list.sort(function (a, b) { return b[1] - a[1]; });
+      if (!list.length) return emptyRow();
+      var max = list[0][1];
+      var html = '';
+      for (var j = 0; j < list.length; j++) html += barRow(catLabel(list[j][0]), CAT_COLORS[list[j][0]], list[j][1], max);
+      return html;
+    }
+
+    function summaryDate() {
+      var totals = {};
+      for (var i = 0; i < state.items.length; i++) {
+        var it = state.items[i];
+        var key = it.expense_date || '￿'; // sentinel sorts last
+        totals[key] = (totals[key] || 0) + baseAmount(it);
+      }
+      var keys = Object.keys(totals).sort();
+      if (!keys.length) return emptyRow();
+      var max = 0; for (var m = 0; m < keys.length; m++) if (totals[keys[m]] > max) max = totals[keys[m]];
+      var html = '';
+      for (var k = 0; k < keys.length; k++) {
+        var label = keys[k] === '￿' ? t('noDate') : keys[k];
+        html += barRow(label, null, totals[keys[k]], max);
+      }
+      return html;
+    }
+
+    function summaryPayer() {
+      var totals = {}; var order = [];
+      for (var i = 0; i < state.items.length; i++) {
+        var it = state.items[i];
+        if (hasPayers(it)) {
+          for (var p = 0; p < it.payers.length; p++) {
+            var payer = it.payers[p];
+            var name = payer.username || ('#' + payer.user_id);
+            if (!(name in totals)) { totals[name] = 0; order.push(name); }
+            totals[name] += baseOf(payer.amount, it);
+          }
+        } else {
+          var u = t('unassigned');
+          if (!(u in totals)) { totals[u] = 0; order.push(u); }
+          totals[u] += baseAmount(it);
+        }
+      }
+      var list = order.map(function (n) { return [n, totals[n]]; });
+      list.sort(function (a, b) { return b[1] - a[1]; });
+      if (!list.length) return emptyRow();
+      var max = list[0][1];
+      var html = '';
+      for (var j = 0; j < list.length; j++) html += barRow(list[j][0], null, list[j][1], max);
+      return html;
+    }
+
+    function summaryPaid() {
+      var covered = 0, coveredN = 0, outstanding = 0, outstandingN = 0;
+      for (var i = 0; i < state.items.length; i++) {
+        var it = state.items[i];
+        if (hasPayers(it)) { covered += baseAmount(it); coveredN++; }
+        else { outstanding += baseAmount(it); outstandingN++; }
+      }
+      var max = Math.max(covered, outstanding);
+      var html = '';
+      html += '<div class="bt-srow"><div class="lbl"><span class="bt-dot" style="background:var(--success)"></span>' +
+        escapeHtml(t('paid')) + ' <span class="pct">(' + coveredN + ')</span></div>' +
+        '<div class="bt-bar"><span style="width:' + (max ? Math.round(covered / max * 100) : 0) + '%;background:var(--success)"></span></div>' +
+        '<div class="amt">' + escapeHtml(fmtMoney(covered)) + '</div></div>';
+      html += '<div class="bt-srow"><div class="lbl"><span class="bt-dot" style="background:var(--warning)"></span>' +
+        escapeHtml(t('unpaid')) + ' <span class="pct">(' + outstandingN + ')</span></div>' +
+        '<div class="bt-bar"><span style="width:' + (max ? Math.round(outstanding / max * 100) : 0) + '%;background:var(--warning)"></span></div>' +
+        '<div class="amt">' + escapeHtml(fmtMoney(outstanding)) + '</div></div>';
+      return html;
+    }
+
+    function emptyRow() { return '<div class="bt-srow"><div class="lbl trek-muted">—</div><div></div><div></div></div>'; }
+
+    // --- Event wiring (delegation, re-bound after each render) ----------------
+    function wire() {
+      var root = document.getElementById('root');
+
+      var filter = document.getElementById('bt-filter');
+      if (filter) filter.addEventListener('change', function () { state.filter = filter.value; render(); });
+
+      root.addEventListener('click', onClick);
+
+      var ed = document.getElementById('editor');
+      if (ed) {
+        ed.focus();
+        if (ed.select && ed.tagName === 'INPUT') { try { ed.select(); } catch (e) {} }
+        ed.addEventListener('keydown', onEditorKey);
+        ed.addEventListener('blur', function () { setTimeout(commitEdit, 0); });
+        if (ed.tagName === 'SELECT') ed.addEventListener('change', commitEdit);
+      }
+    }
+
+    function onClick(e) {
+      var el;
+      if ((el = e.target.closest('[data-collapse]'))) {
+        var cat = el.getAttribute('data-collapse');
+        state.collapsed[cat] = !state.collapsed[cat];
+        render(); return;
+      }
+      if ((el = e.target.closest('[data-add]'))) {
+        addExpense(el.getAttribute('data-add')); return;
+      }
+      if ((el = e.target.closest('[data-tab]'))) {
+        state.summaryTab = el.getAttribute('data-tab'); render(); return;
+      }
+      if ((el = e.target.closest('[data-del]'))) {
+        state.pendingDelete = Number(el.getAttribute('data-del')); render(); return;
+      }
+      if ((el = e.target.closest('[data-del-yes]'))) {
+        removeItem(Number(el.getAttribute('data-del-yes'))); return;
+      }
+      if ((el = e.target.closest('[data-del-no]'))) {
+        state.pendingDelete = null; render(); return;
+      }
+      if ((el = e.target.closest('[data-edit]'))) {
+        // Ignore clicks that land on the currently-open editor.
+        if (e.target.id === 'editor') return;
+        startEdit(Number(el.getAttribute('data-id')), el.getAttribute('data-edit'));
+        return;
+      }
+    }
+
+    function onEditorKey(e) {
+      if (e.key === 'Enter') { e.preventDefault(); commitEdit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+      else if (e.key === 'Tab') { /* let blur commit naturally */ }
+    }
+
+    // --- Boot ----------------------------------------------------------------
+    trek.onContext(function (m) {
+      state.locale = m.locale || 'en';
+      // Display currency = the user's Settings default_currency (≥3.2.1 context).
+      var disp = (m.formats && m.formats.currency) ? String(m.formats.currency).toUpperCase() : null;
+      var newTrip = m.tripId != null ? Number(m.tripId) : null;
+      var changed = false;
+      if (disp && disp !== state.displayCurrency) { state.displayCurrency = disp; changed = true; }
+      if (newTrip && newTrip !== state.tripId) { state.tripId = newTrip; changed = true; }
+      if (changed && state.tripId) {
+        state.loading = true;
+        render();
+        load();
+      } else if (!state.tripId && !newTrip) {
+        // trip-page always has a trip; guard just in case.
+        state.loading = false;
+        state.error = 'No trip in context';
+        render();
+      }
+    });
+
+    // No WS into the sandbox — refresh when the user returns to the tab.
+    window.addEventListener('focus', function () { if (state.tripId) load(); });
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+node_modules
+.idea
+package-lock.json
+.trek-dev/
+plugin.zip
+*.log
+client/harness.html
+.DS_Store
